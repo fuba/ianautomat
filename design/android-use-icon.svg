@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" fill="none">
+  <title>anautomat app icon</title>
+  <desc>Four open screen corners and an action point. An original geometric mark without initials.</desc>
+  <rect width="108" height="108" rx="24" fill="#161616"/>
+  <g fill="#FFFFFF">
+    <path d="M32 48V36Q32 32 36 32H48V39H39V48Z"/>
+    <path d="M60 32H72Q76 32 76 36V48H69V39H60Z"/>
+    <path d="M76 60V72Q76 76 72 76H60V69H69V60Z"/>
+    <path d="M48 76H36Q32 76 32 72V60H39V69H48Z"/>
+    <path d="M62 50A8 8 0 1 1 46 50A8 8 0 1 1 62 50Z"/>
+    <path d="M50.5 61H57.5V65H50.5Z"/>
+  </g>
+</svg>
