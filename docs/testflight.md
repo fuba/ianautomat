@@ -13,4 +13,6 @@ After processing, assign the build and the intended Apple Account to an internal
 
 ## Initial delivery
 
-Version 0.1.0, build 1. iPhone simulator tests and signed IPA verification were performed on Xcode 27.2. The first upload attempt reported that the App Store Connect record did not exist. TestFlight processing, tester assignment, installation on a physical iPhone, and authenticated inference are pending.
+On November 13, 2026, build 0.1.0 (1) passed the iPhone simulator tests and distribution-signature verification on Xcode 27.2. It was uploaded to App Store Connect for internal testing, processed successfully, and assigned to the personal internal group with one invited tester. Automatic distribution is off for that group. Add subsequent builds manually.
+
+Physical iPhone installation and authenticated ChatGPT inference have yet to be verified.
