@@ -8,6 +8,11 @@ enum AppError: LocalizedError, Equatable {
     case noModels
     case badResponse
     case interrupted
+    case incomplete
+    case refused
+    case unexpectedContentType
+    case invalidStreamEvent
+    case emptyModelOutput
     case busy
     case invalidTool
     case invalidNumbers
@@ -26,6 +31,11 @@ enum AppError: LocalizedError, Equatable {
         case .noModels: String(localized: "No models are available for this account.")
         case .badResponse: String(localized: "The server returned an invalid response.")
         case .interrupted: String(localized: "The response stream was interrupted.")
+        case .incomplete: String(localized: "The model response did not finish.")
+        case .refused: String(localized: "The model declined to complete this goal.")
+        case .unexpectedContentType: String(localized: "OpenAI did not return a response stream.")
+        case .invalidStreamEvent: String(localized: "The response stream contained an invalid event.")
+        case .emptyModelOutput: String(localized: "The model completed without returning an action.")
         case .busy: String(localized: "Another connection operation is in progress.")
         case .invalidTool: String(localized: "The model returned an unsupported action or tool.")
         case .invalidNumbers: String(localized: "Enter valid numbers and avoid dividing by zero.")

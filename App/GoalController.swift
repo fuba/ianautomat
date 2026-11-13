@@ -104,7 +104,7 @@ final class GoalController {
                 let result = try await OpenAI.next(run: run, model: model, token: token, language: language)
                 guard generation == id, !Task.isCancelled, let latest = current else { return }
                 run = latest
-                run.tokens += result.tokens
+                run.tokens += result.tokens ?? 0
                 let action = try GoalAction.parse(result.text)
                 if let artifact = action.artifact {
                     guard run.artifacts.count < 32 else { throw AppError.invalidTool }
@@ -124,12 +124,13 @@ final class GoalController {
                     run.artifacts = latest.artifacts
                     run.logs = latest.logs
                 }
-                let retryAfter = (error as? RetryAfter)?.seconds
+                let responseFailure = error as? ResponseFailure
+                let retryAfter = responseFailure?.retryAfter ?? (error as? RetryAfter)?.seconds
                 let networkError = (error as? URLError).map {
                     [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost].contains($0.code)
                 } ?? false
                 let retryable = networkError || (error as? AppError)?.retryable == true ||
-                    (retryAfter.map { $0 <= 86_400 } ?? false)
+                    (responseFailure?.retryable ?? (retryAfter.map { $0 <= 86_400 } ?? false))
                 run.logs.append(displayError(error))
                 if failures < 2, budget > 0, retryable {
                     let base = pow(2, Double(failures + 1))
