@@ -77,3 +77,11 @@
 "Reconnect ChatGPT" = "ChatGPT に再接続";
 "Using ChatGPT plan" = "ChatGPT プランを使用中";
 "You’re using your ChatGPT plan" = "ChatGPT プランを使用しています";
+"ChatGPT plan usage is unavailable for this account or workspace." = "このアカウントまたはワークスペースでは、ChatGPT プランを利用できません。";
+"OpenAI could not complete this request." = "OpenAI がリクエストを完了できませんでした。";
+"OpenAI did not return a response stream." = "OpenAI から応答ストリームが返りませんでした。";
+"The model completed without returning an action." = "モデルは処理を完了しましたが、実行する操作を返しませんでした。";
+"The model declined to complete this goal." = "モデルはこのゴールの実行を拒否しました。";
+"The model response did not finish." = "モデルの応答が完了しませんでした。";
+"The response stream contained an invalid event." = "応答ストリームに無効なイベントが含まれていました。";
+"This ChatGPT model or plan did not accept a requested feature." = "この ChatGPT モデルまたはプランでは、リクエストした機能を利用できません。";

@@ -238,6 +238,7 @@ final class Account {
 
 func displayError(_ error: Error) -> String {
     if let error = error as? AppError { return error.localizedDescription }
+    if let error = error as? ResponseFailure { return error.localizedDescription }
     if let error = error as? RetryAfter { return error.localizedDescription }
     if let error = error as? URLError {
         if error.code == .timedOut { return String(localized: "The request timed out.") }

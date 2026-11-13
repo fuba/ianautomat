@@ -90,8 +90,10 @@ enum OpenAI {
         or calculator for a numeric operation on a user-entered list (sum, subtract, multiply,
         divide, average, minimum, maximum). Body explains a tool's purpose or holds note text.
         Report done when the goal is met. Report blocked when it requires another app, browsing,
-        device access, code execution, or another capability unavailable here. Never claim to have
-        performed those actions. Do not produce code for execution, URLs to open, or instructions
+        device access, code execution, or another capability unavailable here. You cannot read
+        Notification Center. If the user supplies notification text in the goal, summarize that text.
+        If the goal requires unseen notifications, explain the limit and ask for the notification text.
+        Never claim to have performed unavailable actions. Do not produce code for execution, URLs to open, or instructions
         for attacks. Use empty strings or an empty items list for fields the action does not need.
         Avoid creating tools that are already listed in the input.
         """
@@ -120,26 +122,35 @@ enum OpenAI {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (bytes, response) = try await session.bytes(for: request)
-        try checked(response)
-        guard (response as? HTTPURLResponse)?.mimeType == "text/event-stream" else { throw AppError.badResponse }
-        var stream = ResponseStream()
-        var event: [String] = []
-        var size = 0
-        for try await line in bytes.lines {
-            try Task.checkCancellation()
-            size += line.utf8.count + 1
-            guard size <= 4_000_000 else { throw AppError.badResponse }
-            if line.isEmpty {
-                if !event.isEmpty { try stream.consume(event.joined(separator: "\n")) }
-                if stream.completed { return try stream.result() }
-                event.removeAll(keepingCapacity: true)
-            } else if line == "data" {
-                event.append("")
-            } else if line.hasPrefix("data:") {
-                let value = line.dropFirst(5)
-                event.append(String(value.first == " " ? value.dropFirst() : value))
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse else { throw AppError.badResponse }
+        let requestID = http.value(forHTTPHeaderField: "x-request-id")
+        guard (200..<300).contains(http.statusCode) else {
+            var body = Data()
+            // Bound error reads and never include the raw response body in a user log.
+            for try await byte in bytes {
+                body.append(byte)
+                if body.count == 16_384 { break }
             }
+            throw ResponseFailure(
+                status: http.statusCode, requestID: requestID, body: body,
+                retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(retryAfter)
+            )
         }
+        guard http.mimeType == "text/event-stream" else {
+            throw ResponseFailure(status: http.statusCode, requestID: requestID, fields: nil,
+                                  reason: .unexpectedContentType)
+        }
+        var stream = ResponseStream(requestID: requestID)
+        var size = 0
+        for try await byte in bytes {
+            if size.isMultiple(of: 4096) { try Task.checkCancellation() }
+            size += 1
+            guard size <= 4_000_000 else { throw AppError.badResponse }
+            try stream.receive(byte)
+            if stream.completed { break }
+        }
+        try Task.checkCancellation()
         return try stream.result()
     }
 }
@@ -164,42 +175,131 @@ struct RetryAfter: LocalizedError {
 
 struct ResponseResult {
     let text: String
-    let tokens: Int
+    let tokens: Int?
+}
+
+struct ResponseFailure: LocalizedError {
+    let status: Int?
+    let requestID: String?
+    let code: String?
+    let parameter: String?
+    let retryAfter: TimeInterval?
+    private let reason: AppError?
+
+    init(status: Int, requestID: String?, body: Data, retryAfter: TimeInterval? = nil) {
+        let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+        self.init(status: status, requestID: requestID, fields: json?["error"] as? [String: Any],
+                  retryAfter: retryAfter)
+    }
+
+    init(status: Int? = nil, requestID: String?, fields: [String: Any]?,
+         retryAfter: TimeInterval? = nil, reason: AppError? = nil) {
+        self.status = status
+        self.requestID = Self.label(requestID, pattern: /req_[A-Za-z0-9_-]+/)
+        code = Self.label(fields?["code"] as? String, pattern: /[a-z][a-z0-9_]*/)
+        parameter = Self.label(fields?["param"] as? String, pattern: /[a-z][a-zA-Z0-9_.\[\]]*/)
+        self.retryAfter = retryAfter
+        self.reason = reason
+    }
+
+    var retryable: Bool {
+        if code == "subscription_sharing_usage_limit_exceeded" || code == "subscription_sharing_user_not_eligible" {
+            return false
+        }
+        if let retryAfter, retryAfter > 86_400 { return false }
+        return code == "server_error" || code == "rate_limit_exceeded" ||
+            code == "subscription_sharing_usage_unavailable" ||
+            status.map { [408, 429, 500, 502, 503, 504].contains($0) } == true
+    }
+
+    var errorDescription: String? {
+        let summary: String
+        switch code {
+        case "subscription_sharing_usage_limit_exceeded":
+            summary = AppError.usageLimit.localizedDescription
+        case "subscription_sharing_user_not_eligible":
+            summary = String(localized: "ChatGPT plan usage is unavailable for this account or workspace.")
+        case "subscription_sharing_unsupported_capability":
+            summary = String(localized: "This ChatGPT model or plan did not accept a requested feature.")
+        default:
+            summary = reason?.localizedDescription ?? String(localized: "OpenAI could not complete this request.")
+        }
+        let details = [status.map { "HTTP \($0)" }, code, parameter, requestID].compactMap { $0 }
+        return details.isEmpty ? summary : summary + " [" + details.joined(separator: " · ") + "]"
+    }
+
+    private static func label(_ value: String?, pattern: Regex<Substring>) -> String? {
+        guard let value, value.utf8.count <= 128,
+              value.wholeMatch(of: pattern) != nil else { return nil }
+        return value
+    }
 }
 
 struct ResponseStream {
+    private let requestID: String?
     private var final: ResponseResult?
+    private var line: [UInt8] = []
+    private var event: [String] = []
+    private var firstLine = true
+    private var afterCR = false
+
+    init(requestID: String? = nil) { self.requestID = requestID }
+
     var completed: Bool { final != nil }
+
+    mutating func receive(_ byte: UInt8) throws {
+        // AsyncLineSequence omits empty lines, which delimit SSE events.
+        if byte == 10 && afterCR {
+            afterCR = false
+            return
+        }
+        afterCR = byte == 13
+        guard byte == 10 || byte == 13 else {
+            line.append(byte)
+            return
+        }
+        if firstLine {
+            if line.starts(with: [0xEF, 0xBB, 0xBF]) { line.removeFirst(3) }
+            firstLine = false
+        }
+        if line.isEmpty {
+            if !event.isEmpty { try consume(event.joined(separator: "\n")) }
+            event.removeAll(keepingCapacity: true)
+        } else if let field = String(bytes: line, encoding: .utf8) {
+            if field == "data" { event.append("") }
+            if field.hasPrefix("data:") {
+                let value = field.dropFirst(5)
+                event.append(String(value.first == " " ? value.dropFirst() : value))
+            }
+        }
+        line.removeAll(keepingCapacity: true)
+    }
 
     mutating func consume(_ json: String) throws {
         guard !json.isEmpty, json != "[DONE]" else { return }
-        guard let event = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
-              let type = event["type"] as? String else { throw AppError.badResponse }
+        guard let event = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let type = event["type"] as? String else { throw AppError.invalidStreamEvent }
         let response = event["response"] as? [String: Any]
         switch type {
         case "response.completed":
             guard response?["status"] as? String == "completed",
-                  let messages = response?["output"] as? [[String: Any]] else { throw AppError.badResponse }
+                  let messages = response?["output"] as? [[String: Any]] else { throw AppError.invalidStreamEvent }
             let content = messages.filter { $0["type"] as? String == "message" && $0["role"] as? String == "assistant" }
                 .flatMap { $0["content"] as? [[String: Any]] ?? [] }
+            if content.contains(where: { $0["type"] as? String == "refusal" }) { throw AppError.refused }
             let text = content.filter { $0["type"] as? String == "output_text" }
                 .compactMap { $0["text"] as? String }.joined()
+            guard !text.isEmpty else { throw AppError.emptyModelOutput }
             let usage = response?["usage"] as? [String: Any]
-            guard !text.isEmpty, let tokens = usage?["total_tokens"] as? Int, (0...10_000_000).contains(tokens) else {
-                throw AppError.badResponse
-            }
+            let tokens = (usage?["total_tokens"] as? Int).flatMap { (0...10_000_000).contains($0) ? $0 : nil }
             final = ResponseResult(text: text, tokens: tokens)
         case "error", "response.failed":
-            let error = response?["error"] as? [String: Any]
-            let code = (error?["code"] ?? event["code"]) as? String
-            switch code {
-            case "subscription_sharing_usage_limit_exceeded", "subscription_sharing_usage_unavailable": throw AppError.usageLimit
-            case "server_error": throw AppError.interrupted
-            case "rate_limit_exceeded": throw AppError.http(429)
-            default: throw AppError.badResponse
-            }
-        case "response.incomplete": throw AppError.badResponse
-        default: break
+            let fields = response?["error"] as? [String: Any] ?? event["error"] as? [String: Any] ?? event
+            throw ResponseFailure(requestID: requestID, fields: fields)
+        case "response.incomplete":
+            throw AppError.incomplete
+        default:
+            break
         }
     }
 
